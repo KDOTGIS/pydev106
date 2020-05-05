@@ -129,7 +129,7 @@ def PublicateNetworkProd2Target(target):
     else:
         pub_database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\geo@KHPubDev.sde'    
         pub_sdedb = 'C:\Users\planadm\GISDATA\DbConnections\KHDev\sde@KHPubDev.sde'
-        RH_Database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\RH@Khub.sde'
+        #RH_Database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\RH@Khub.sde'
         
     wsruncode = datetime.now()
     dbname = "Publish"+str(target)+str(wsruncode.year).zfill(4)+str(wsruncode.month).zfill(2)+str(wsruncode.day).zfill(2)
@@ -254,11 +254,13 @@ def CreatePrimaryNetwork(target):
     # Description: Create concurrency table (WITH STATE SYS INV DIR ROUTES ONLY)
     # and copies Prefixes 1,2,3 Routes to the local geodatabase C:\\\\temp\\CONCURRENT.gdb
     # https://community.esri.com/thread/227849-export-only-dominant-routes-from-lrs
-
+    # 4/13/2020 added dominance dictionary for override of dominant side by side pairs
+    # 4/16/2020 added prefix 8 and the ghost suffix for refined control over dominant routes
+	# 4/49/2020 added support for dominant flag event control and also eliminated prefix 8 from queries
     # utilizes workspace C:\\\\temp\\CONCURRENT+YYYYMMDD.gdb - attempts to delete if not existing
     # ---------------------------------------------------------------------------
     from datetime import datetime
-    from DomList import OverrideDict
+    #from DomList import OverrideDict
     
     if target == 'Prod':
         pub_database = r'C:\Users\planadm\GISDATA\DbConnections\Prod\Geo@KHPub.sde'
@@ -275,27 +277,29 @@ def CreatePrimaryNetwork(target):
         RH_Database = tds
 
     else:
+        target = 'Dev'
         pub_database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\Geo@KHPubDev.sde'   
         pubinstance = r"khdbpubdev\khubpub_dev"
         pub_sdedb = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\sde@KHPubDev.sde'
         tds = r'C:\Users\planadm\GISDATA\DbConnections\Prod\TDSUser@KHProd.sde'
-        RH_Database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\RH@Khub.sde'
-        target = 'Dev'
-    
+        RH_Database = tds
+   
     from arcpy import (env, da, CreateFileGDB_management, AddMessage, AddWarning, Exists, MakeRouteEventLayer_lr, DisconnectUser,
     CheckExtension, CheckOutExtension, CreateRoutes_lr, ChangePrivileges_management, CopyFeatures_management, Delete_management, 
     MultipartToSinglepart_management, Copy_management, Merge_management, MakeTableView_management, Erase_analysis, ExecuteError, 
     GetMessages, LocateFeaturesAlongRoutes_lr, CheckInExtension, MakeFeatureLayer_management, FeatureClassToFeatureClass_conversion, 
     CreateTable_management, Append_management, AddField_management, CalculateField_management, TableToTable_conversion, Project_management,
-    Dissolve_management, Statistics_analysis, AddJoin_management, RemoveJoin_management, AddIndex_management)
+    Dissolve_management, Statistics_analysis, AddJoin_management, RemoveJoin_management, AddIndex_management, SelectLayerByAttribute_management,
+    OverlayRouteEvents_lr)
     from datetime import datetime
-    
+
     wsruncode = datetime.now()
     dbname = "CONCURRENT"+str(target)+str(wsruncode.year).zfill(4)+str(wsruncode.month).zfill(2)+str(wsruncode.day).zfill(2)
     ws= env.workspace=r"C:\\temp\\"+dbname+".gdb"
     if Exists(ws):
         try:
             Delete_management(ws)
+            CreateFileGDB_management(r"C:/temp", dbname, "CURRENT")
         except: 
             raise LicenseError
             CreateFileGDB_management(r"C:/temp", dbname, "CURRENT")
@@ -324,19 +328,55 @@ def CreatePrimaryNetwork(target):
     LRSCounty = db_connection+"\\KHUB.RH.LRS_County"
     KHUBRoutes = "KHUBRoutes"
     KHUBRoutesLyr="KHUBRoutesLyr"
-    
+
     from locref import CalculateRouteConcurrencies
-    whereClauseAll= "Prefix IN ('1','2','3','4','5')"
+    whereClauseAll= "Prefix IN ('1','2','3','4','5','8')"
     MakeFeatureLayer_management (LRSCounty,KHUBRoutesLyr,whereClauseAll)
-    CalculateRouteConcurrencies(KHUBRoutesLyr, "temp_table", "", "FIND_DOMINANCE")
-    if Exists(ws + "\\concurr_tbl_all"):
-        # Delete it if it does exist
-        Delete_management(ws + "\\concurr_tbl_all")
-    CreateTable_management(ws, "concurr_tbl_all", "temp_table")
-    Append_management("temp_table","concurr_tbl_all")
+    CalculateRouteConcurrencies(KHUBRoutesLyr, ws+r"\\concurr_tbl_all", "", "FIND_DOMINANCE")
+    AddIndex_management(ws+"\\concurr_tbl_all", "SectionId", "SectionIdx")
     AddField_management("concurr_tbl_all", "Prefix", "TEXT", "", "", "1", "", "NULLABLE", "NON_REQUIRED", "")
 
     CalculateField_management("concurr_tbl_all", "Prefix", "Mid( [RouteId],4,1 )", "VB", "")
+
+    AddField_management(ws + "\\concurr_tbl_all", "DominantOverrideFlag", "SHORT", "", "", "", "", "NULLABLE", "NON_REQUIRED", "")
+    #dominance flag event is at C:\Users\planadm\GISDATA\DbConnections\Prod\TDSUser@KHProd.sde\KHUB.RH.ev_ConcurrentFlag
+
+    #the DW table would be a nice feature addition
+    #instead of selecting these segments individually use a spatial/LRS process to select segments from concurr all table
+
+    TableToTable_conversion(db_connection+"\\KHUB.RH.ev_ConcurrentFlag", ws, "ConcurrentFlag")
+    OverlayRouteEvents_lr(ws+r"\\ConcurrentFlag", "RouteID POINT measure", ws+r"\\concurr_tbl_all", "RouteId LINE FromMeasure ToMeasure", "INTERSECT", ws+r"\\ConcFlagsOverlayConcurrTbl", "RouteID POINT measure", "ZERO", "FIELDS", "INDEX")
+    AddIndex_management(ws+"\\ConcFlagsOverlayConcurrTbl", "SectionId", "SectionId1")
+
+
+    CalculateField_management("ConcFlagsOverlayConcurrTbl", "DominantFlag", "1", "VB", "")
+    CalculateField_management("ConcFlagsOverlayConcurrTbl", "DominantOverrideFlag", "1", "VB", "")
+    #Calcualte hte previously dominant values across the section to 0
+
+    MakeTableView_management(ws+"\\ConcFlagsOverlayConcurrTbl", "ConcFlagsOverlayConcurrTbl_View")
+    MakeTableView_management(ws+"\\concurr_tbl_all", "concurr_tbl_all_View")
+    #this join may result in one to many or many to many results
+    AddJoin_management("concurr_tbl_all_View", "SectionId", "ConcFlagsOverlayConcurrTbl_View", "SectionId", "KEEP_ALL")
+    #join and select attribute and drop the joins out, and recalc flags
+    #do it again because the first recalcalc will break second recalc logic
+    #this method will not flag previously nonprimary routes as overriden
+    #select and set the new dominant routes
+    #SelectLayerByAttribute_management("concurr_tbl_all_View", "NEW_SELECTION", "ConcFlagsOverlayConcurrTbl.DominantOverrideFlag=1 AND ConcFlagsOverlayConcurrTbl.DominantFlag=1 AND ConcFlagsOverlayConcurrTbl.RouteID = concurr_tbl_all.RouteId")
+    MakeTableView_management("concurr_tbl_all_View", "concurr_tbl_alt_View", "ConcFlagsOverlayConcurrTbl.DominantOverrideFlag=1 AND ConcFlagsOverlayConcurrTbl.DominantFlag=1 AND ConcFlagsOverlayConcurrTbl.RouteID = concurr_tbl_all.RouteId")
+    SelectLayerByAttribute_management("concurr_tbl_alt_View", "NEW_SELECTION", "1=1")
+    #RemoveJoin_management("concurr_tbl_alt_View", "")
+    CalculateField_management("concurr_tbl_alt_View", "concurr_tbl_all.DominantFlag", "1", "VB", "")
+    CalculateField_management("concurr_tbl_alt_View", "concurr_tbl_all.DominantOverrideFlag", "1", "VB", "")
+    SelectLayerByAttribute_management("concurr_tbl_alt_View", "CLEAR_SELECTION")
+    #RH dumb dominants to non dominant
+    AddJoin_management("concurr_tbl_all_View", "SectionId", "ConcFlagsOverlayConcurrTbl", "SectionId", "KEEP_ALL")
+    MakeTableView_management("concurr_tbl_all_View", "concurr_tbl_alt_View2", "concurr_tbl_all.DominantFlag = 1 AND ConcFlagsOverlayConcurrTbl.DominantOverrideFlag=1 AND ConcFlagsOverlayConcurrTbl.DominantFlag=1 AND ConcFlagsOverlayConcurrTbl.RouteID NOT LIKE concurr_tbl_all.RouteId")
+    SelectLayerByAttribute_management("concurr_tbl_alt_View2", "NEW_SELECTION", "1 = 1")
+    #RemoveJoin_management("concurr_tbl_all_View", "")
+    CalculateField_management("concurr_tbl_alt_View2", "concurr_tbl_all.DominantFlag", "0", "VB", "")
+    CalculateField_management("concurr_tbl_alt_View2", "concurr_tbl_all.DominantOverrideFlag", "1", "VB", "")
+    SelectLayerByAttribute_management("concurr_tbl_alt_View2", "CLEAR_SELECTION")
+
     print ("concurrent table created")
     DisconnectUser(pub_sdedb, "ALL")
     if Exists(pub_database+r'/KHUBPub.GEO.RouteConcurrency'):  
@@ -344,23 +384,14 @@ def CreatePrimaryNetwork(target):
         Delete_management(pub_database+r'/KHUBPub.GEO.RouteConcurrency')
     else:
         pass
-    TableToTable_conversion("concurr_tbl_all", pub_database, "RouteConcurrency", "ToDate IS NULL")
+    TableToTable_conversion(ws+"\\concurr_tbl_all", pub_database, "RouteConcurrency", "ToDate IS NULL")
     #make a copy to update in TDSOutput Route Concurrency in Tdsuser schema
     ChangePrivileges_management((pub_database+r'/KHUBPub.GEO.RouteConcurrency'), "readonly", View="GRANT", Edit="")
     FeatureClassToFeatureClass_conversion(KHUBRoutesLyr, ws, KHUBRoutes, "LRSToDate IS NULL AND Prefix IN ( '1', '2', '3','4','5') ")
     #edit 4/7/2020 add table, flag list of overrides to concurrent, and recalculate dominance overrides
 
-    AddField_management(pub_database+r'/KHUBPub.GEO.RouteConcurrency', "DominantOverrideFlag", "SHORT", "", "", "", "", "NULLABLE", "NON_REQUIRED", "")
-      
-    for route, midmile in OverrideDict.items():
-        print (route, midmile)
-        DomExp = "(("+midmile+" BETWEEN FromMeasure AND ToMeasure) OR ("+midmile+" BETWEEN  ToMeasure AND FromMeasure)) AND (RouteId  like '"+route+"')"
-        print (DomExp)
-        MakeTableView_management(pub_database+r'\KHubPub.GEO.RouteConcurrency', "RouteConcurrency_"+route+(midmile.replace('.', '')), DomExp)
-        CalculateField_management("RouteConcurrency_"+route+(midmile.replace('.', '')), "DominantFlag", "1", "VB", "")
-        CalculateField_management("RouteConcurrency_"+route+(midmile.replace('.', '')), "DominantOverrideFlag", "1", "VB", "")
-    
-    CheckInExtension("Highways")
+
+    #CheckInExtension("Highways")
     print("copy fc completed")
 
 
@@ -411,8 +442,8 @@ def CreatePrimaryNetwork(target):
 
     # Process: Merge output of erase, and the dominant rte seg, COMMON FIELDS WILL BE RouteId, FromMeasure,ToMeasure
     Merge_management([SegmentsToCreateRoutes,DominantFlag1Feat], mergeset)
-    
-    
+
+
                            
     print ("merge completed")
 
@@ -424,9 +455,9 @@ def CreatePrimaryNetwork(target):
     print ("routes creation completed")
 
     #append local routes from transactioal to the mergeset
-    MakeFeatureLayer_management(LRSCounty, "LRS_County_Layer678", "Prefix IN ('6', '7', '8') AND LRSToDate is null")
+    MakeFeatureLayer_management(LRSCounty, "LRS_County_Layer678", "Prefix IN ('6', '7') AND LRSToDate is null")
     Append_management('LRS_County_Layer678', DominantRoutesAll, "NO_TEST")
-    
+
     # Create singlepart features
     MultipartToSinglepart_management(DominantRoutesAll,DominantRtesSinglePart)
     AddField_management(DominantRtesSinglePart, "MinMeas", "DOUBLE", "", "", "", "", "NULLABLE", "NON_REQUIRED", "")
@@ -445,8 +476,8 @@ def CreatePrimaryNetwork(target):
     CntyDIOnState = ws+"\\CountyDomOnState"
     MinStatCntyDIOnState = ws+"\\CountyDomOnState_Statistics"
     #this above shouldnt really be a variable, see line 460 and the join at 469 and calculalte at 470.  The name needs to be 
-    
-    
+
+
     # Create State Routes from County Routes - adding @427 on 12/24/2019
     FeatureClassToFeatureClass_conversion(KHUBRoutesLyr, ws, "SHSRoutes", whereClauseSHS)
     FeatureClassToFeatureClass_conversion(DominantRoutesAll, ws, "SHSDomInv", whereClauseSHSPrimaryInv)
@@ -479,15 +510,16 @@ def CreatePrimaryNetwork(target):
     AddIndex_management("DominantRtesSinglePart", "RouteID", "RouteID1")
     AddIndex_management(MinStatCntyDIOnState, "RouteID", "RouteID2")
     MakeTableView_management(MinStatCntyDIOnState, "JoinStats")
-    AddJoin_management("StateMeasures", "RouteId", "JoinStats", "RouteId", "KEEP_ALL")
-    CalculateField_management("StateMeasures", "DominantRtesSinglePart.FromState", "[DominantRtesSinglePart.MinMeas] + [CountyDomOnState_Statistics.MIN_FMEAS]", "VB")
-    CalculateField_management("StateMeasures", "DominantRtesSinglePart.ToState", "[DominantRtesSinglePart.MaxMeas] + [CountyDomOnState_Statistics.MIN_FMEAS]", "VB")
-    RemoveJoin_management("StateMeasures", "CountyDomOnState_Statistics")
+    #AddJoin_management("StateMeasures", "RouteId", "JoinStats", "RouteId", "KEEP_ALL")
+    #CalculateField_management("StateMeasures", "DominantRtesSinglePart.FromState", "[DominantRtesSinglePart.MinMeas] + [CountyDomOnState_Statistics.MIN_FMEAS]", "VB")
+    #CalculateField_management("StateMeasures", "DominantRtesSinglePart.ToState", "[DominantRtesSinglePart.MaxMeas] + [CountyDomOnState_Statistics.MIN_FMEAS]", "VB")
+    #RemoveJoin_management("StateMeasures", "CountyDomOnState_Statistics")
     #output these results to the publication database
     DisconnectUser(pub_sdedb, "ALL")
     Project_management(DominantRoutesAll, (pub_database+r'/KHUBPub.GEO.'+"LRS_County_Primary"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     FeatureClassToFeatureClass_conversion(DominantRoutesAll, pub_database, "LRS_County_Primary_LCC", "")
     FeatureClassToFeatureClass_conversion(DominantRtesSinglePart, pub_database, "LRS_County_PrimarySP_LCC", "")
+    FeatureClassToFeatureClass_conversion(LRSCounty, pub_database, "LRS_Turnpike", "County = 'KTA'")
     Project_management(DominantRtesSinglePart, (pub_database+r'/KHUBPub.GEO.'+"LRS_County_PrimarySP"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     Project_management(StateRoutes, (pub_database+r'/KHUBPub.GEO.'+"LRS_State"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     ChangePrivileges_management((pub_database+r'/KHUBPub.GEO.LRS_County_Primary'), "readonly", View="GRANT", Edit="")
@@ -515,6 +547,7 @@ def CreatePrimaryNetwork(target):
             message = GetMessages(2)
             update_status_table(status_table, "Primary Routes", status_fields, "Error Occurred", message)
             i += 1
+
 
     
 def LYRS2Pub(target):
@@ -571,10 +604,10 @@ def main():
     #RebuildIndexes() #in testing
     #RecreatePubGDB('Dev')
     #RecreatePubGDB('Prod')
-    PublicateNetworkProd2Target('Prod') ## update prod transactional data to publication in 'dev', 'test', or 'prod'
     CreatePrimaryNetwork('Prod')
-    #PublicateNetworkProd2Target('Test')  
+    PublicateNetworkProd2Target('Prod') ## update prod transactional data to publication in 'dev', 'test', or 'prod'
     #CreatePrimaryNetwork('Test')
+    #PublicateNetworkProd2Target('Test')  
     #PublicateNetworkProd2Target('Dev') 
     #CreatePrimaryNetwork('Dev')
     #LYRS2Pub('Prod')
