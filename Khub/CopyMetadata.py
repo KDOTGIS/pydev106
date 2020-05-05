@@ -2,7 +2,7 @@
 Created on Aug 13, 2019
 Metadata Export from Dev and import to TEST, check. then then run on Prod
 takes about 20 minutes to run on all listed feature classes in dev test and prod
-version as deployed to AR55
+
 @author: kyleg
 '''
 
@@ -61,7 +61,7 @@ def importTarget(target):
 def main():
     exportFromTransDev()  #do this on a routine, deployed with publication upddates
     MetadataScrubber()  # and do this
-    importTarget(DevPub)
+    #importTarget(DevPub)
     importTarget(TestPub)
     importTarget(ProdPub)
     importTarget(TransTest)
