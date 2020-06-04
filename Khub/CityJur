@@ -1,0 +1,83 @@
+USE SCRATCH
+
+select Distinct [CITY_CD] from [KG_CORPORATEBOUNDARYLOAD]
+order by [CITY_CD]
+
+select COUNT(*) from [KG_CORPORATEBOUNDARYLOAD] WHERE [CITY_CD] = ''
+
+
+select Distinct [MUNI] from [KG_CORPORATEBOUNDARYLOAD]
+order by [MUNI]
+
+UPDATE [KG_CORPORATEBOUNDARYLOAD]
+set [URBANCITYNAME] = 'Rural' WHERE [URBANCITYNAME] = ''
+
+UPDATE [KG_CORPORATEBOUNDARYLOAD]
+set [URBANCITYNO] = '999' WHERE [URBANCITYNO] = '0'
+
+UPDATE [KG_CORPORATEBOUNDARYLOAD]
+set [CITY_CD] = '999' WHERE [CITY_CD] = ''
+
+UPDATE [KG_CORPORATEBOUNDARYLOAD]
+set [MUNI] = 'Unincorporated' where [MUNI] = ''
+
+UPDATE [KG_CORPORATEBOUNDARYLOAD]
+set [CITY] =  'Unincorporated' where [CITY] = ''
+
+
+select routeid, fmeas, tmeas, --muni_orig,
+muni,
+city, 
+city_cd,
+--new_city new_city_orig, new_city_cd new_city_cd_orig,
+case when muni = 'UNINCORPORATED' THEN 'UNINCORPORATED' ELSE NEW_CITY END NEW_CITY,
+case when muni = 'FREEPORT' then 194
+when muni = 'FT LEAVENWORTH' then 745
+when muni = 'GAS' THEN 204
+WHEN MUNI = 'GOVE CITY' THEN 216
+WHEN MUNI = 'LEROY' THEN 312
+WHEN MUNI = 'LINCOLN CENTER' THEN 316
+WHEN MUNI = 'MILDRED' THEN 365
+WHEN MUNI = 'ST FRANCIS' THEN 488
+WHEN MUNI = 'ST GEORGE' THEN 489
+WHEN MUNI = 'ST JOHN' THEN 491
+WHEN MUNI = 'ST MARYS' THEN 492
+WHEN MUNI = 'THE HIGHLANDS' THEN 648
+WHEN MUNI = 'UNINCORPORATED' THEN '999' ELSE New_city_cd end new_city_cd
+INTO scratch.tdsuser.kg_CityJur047
+from
+(select ROUTEID, fmeas, tmeas, county_name,
+case when muni = '999' then 'UNINCORPORATED' ELSE MUNI END MUNI,
+city, city_cd
+from [KG_CORPORATEBOUNDARYLOAD]
+) as muni
+left join
+(select distinct city new_city, city_cd new_city_cd
+from [KG_CORPORATEBOUNDARYLOAD]) as city
+on muni.muni = city.new_city
+--where muni > '9%'
+where 1=1
+AND new_city_cd is not null
+order by new_city_cd, muni.routeid, muni.fmeas
+ 
+ select * from scratch.tdsuser.kg_CityJur047
+
+select
+ROW_NUMBER() OVER(ORDER BY a.routeid, fmeas ASC) AS RowNum,
+CONCAT('GIS_CITYJUR', ROW_NUMBER() OVER(ORDER BY a.routeid, fmeas ASC)+100000) EVENTID,
+a.routeid,
+fmeas frommeasure,
+tmeas tomeasure,
+cast(new_city_cd as varchar) cityjurisdiction,
+isnull(cast(b.lrsfromdate as datetime), '2017-12-31') InventoryStartDate,
+isnull(cast(b.lrsfromdate as datetime), '2017-12-31') lrsfromdate,
+cast(NULL as datetime) lrstodate,
+'ASD' SourceCIT
+into scratch.tdsuser.kg_CityJur076
+from scratch.tdsuser.kg_CityJur047 a
+left join khub.rh.lrs_county b
+on a.routeid = b.routeid
+where b.lrstodate is null
+order by inventorystartdate
+
+select * from scratch.tdsuser.kg_CityJur076
