@@ -43,7 +43,31 @@ in_coor_system="""PROJCS[
     PARAMETER['latitude_of_origin',36.0],
     UNIT['Foot_US',0.3048006096012192]]"""
 
-    
+def CleanupProc():
+    from arcpy import env, Exists, Delete_management
+    from datetime import datetime, timedelta
+    cleanupfiledate = datetime.now()-timedelta(days = 2)
+    #target = "Prod"
+    targetlist = ["Prod", "Test"]
+
+    #print(deldbPublished)
+    #print(deldbConcurrent)
+    for target in targetlist:
+        dbPublished = "Publish"+str(target)+str(cleanupfiledate.year).zfill(4)+str(cleanupfiledate.month).zfill(2)+str(cleanupfiledate.day).zfill(2)
+        dbConcurrency = "Concurrent"+str(target)+str(cleanupfiledate.year).zfill(4)+str(cleanupfiledate.month).zfill(2)+str(cleanupfiledate.day).zfill(2)
+        deldbPublished = "C:\\temp\\"+dbPublished+".gdb"
+        deldbConcurrent = "C:\\temp\\"+dbConcurrency+".gdb"
+        if Exists(deldbPublished):
+            Delete_management(deldbPublished)
+            print(deldbPublished + " deleted")
+        else:
+            print(deldbPublished + " does not exist")
+
+        if Exists(deldbConcurrent):
+            Delete_management(deldbConcurrent)
+            print(deldbConcurrent+ " deleted")
+        else:
+            print(deldbConcurrent + " does not exist")
     
 def Analyze():
     rh = r'C:\Users\planadm\GISDATA\DbConnections\Prod\RH@KHTransKhub.sde'
@@ -174,15 +198,15 @@ def PublicateNetworkProd2Target(target):
             event_name = event.split(".")[-1]
             print(RH_Database+r'/KHUB.RH.'+ event +" " +event_name)
             DisconnectUser(pub_sdedb, "ALL")
-            FeatureClassToFeatureClass_conversion(RH_Database+r'/KHUB.RH.'+ event, ws, str(event_name)+"lyr", where_clause="""(LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP)""")
+            FeatureClassToFeatureClass_conversion(RH_Database+r'/KHUB.RH.'+ event, ws, str(event_name)+"lyr", where_clause="""((LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP)) or (LRSFromDate>CURRENT_TIMESTAMP and substring(RouteID,4,6) = '599999')""")
             Project_management((ws+r"/"+str(event_name)+"lyr"), (pub_database_path+r'/KHUBPub.GEO.'+event_name), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
             ChangePrivileges_management((pub_database_path+r'/KHUBPub.GEO.'+event_name), "readonly", View="GRANT", Edit="")
-            AddMessage('{0} {1}: {2} {3} {4}'.format(event_name, "copied over publication database", i, "of", len(EventList)))
+            AddMessage('{0} {1}: {2} {3} {4}'.format(event_name, "copied over publication database", i, "of", len(pub_event_list)))
             update_status_table(status_table, event_name, status_fields, "Overwrite in Publication Database", None)
                 
             i += 1    
         except ExecuteError:
-            AddWarning('{0} {1}: {2} {3} {4}'.format(event_name, "produced an error", i, "of", len(EventList)))
+            AddWarning('{0} {1}: {2} {3} {4}'.format(event_name, "produced an error", i, "of", len(pub_event_list)))
             message = GetMessages(2)
             update_status_table(status_table, event_name, status_fields, "Error Occurred", message)
             i += 1
@@ -193,7 +217,7 @@ def PublicateNetworkProd2Target(target):
         try:
             network_name = network.split(".")[-1]
             DisconnectUser(pub_sdedb, "ALL")
-            FeatureClassToFeatureClass_conversion(RH_Database+r'/KHUB.RH.'+ network, ws, str(network_name), """(LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP)""")
+            FeatureClassToFeatureClass_conversion(RH_Database+r'/KHUB.RH.'+ network, ws, str(network_name), """((LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP)) or (LRSFromDate>CURRENT_TIMESTAMP and substring(RouteID,4,6) = '599999')""")
             Project_management(ws+r"/"+str(network_name), (pub_database_path+r'/KHUBPub.GEO.'+network_name), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
             ChangePrivileges_management((pub_database_path+r'/KHUBPub.GEO.'+network_name), "readonly", View="GRANT", Edit="")
             AddMessage('{0} {1}'.format(network_name, "overwrote in publication database"))
@@ -256,7 +280,7 @@ def CreatePrimaryNetwork(target):
     # https://community.esri.com/thread/227849-export-only-dominant-routes-from-lrs
     # 4/13/2020 added dominance dictionary for override of dominant side by side pairs
     # 4/16/2020 added prefix 8 and the ghost suffix for refined control over dominant routes
-	# 4/49/2020 added support for dominant flag event control and also eliminated prefix 8 from queries
+    # 4/49/2020 added support for dominant flag event control and also eliminated prefix 8 from queries
     # utilizes workspace C:\\\\temp\\CONCURRENT+YYYYMMDD.gdb - attempts to delete if not existing
     # ---------------------------------------------------------------------------
     from datetime import datetime
@@ -519,7 +543,9 @@ def CreatePrimaryNetwork(target):
     Project_management(DominantRoutesAll, (pub_database+r'/KHUBPub.GEO.'+"LRS_County_Primary"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     FeatureClassToFeatureClass_conversion(DominantRoutesAll, pub_database, "LRS_County_Primary_LCC", "")
     FeatureClassToFeatureClass_conversion(DominantRtesSinglePart, pub_database, "LRS_County_PrimarySP_LCC", "")
-    FeatureClassToFeatureClass_conversion(LRSCounty, pub_database, "LRS_Turnpike", "County = 'KTA'")
+    FeatureClassToFeatureClass_conversion(LRSCounty, pub_database, "LRS_Turnpike", "(LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP) AND RouteID like 'KTA%'")
+    #adding 5/18/20 creation of LRS_Siate feature class NETWORKS to pub
+    #CreateRoutes_lr("KHubPub.GEO.ev_StateOnCounty", "StateRouteId", pub_database+r'/KHUBPub.GEO.'+"LRS_State_Primary_LCC", "TWO_FIELDS", "FromState", "ToState", "UPPER_LEFT", "1", "0", "IGNORE", "INDEX")
     Project_management(DominantRtesSinglePart, (pub_database+r'/KHUBPub.GEO.'+"LRS_County_PrimarySP"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     Project_management(StateRoutes, (pub_database+r'/KHUBPub.GEO.'+"LRS_State"), webmerc, transform_method, in_coor_system, "NO_PRESERVE_SHAPE", "", "NO_VERTICAL")
     ChangePrivileges_management((pub_database+r'/KHUBPub.GEO.LRS_County_Primary'), "readonly", View="GRANT", Edit="")
@@ -589,6 +615,53 @@ def LYRS2Pub(target):
     MakeRouteEventLayer_lr(tds+r"/KHUB.RH.LRS_County", "RouteId", tds+r"/KHUB.TDSUser.PS_PLV_Def", "RouteID LINE FromMeasure ToMeasure", r"PavementLayers", "", "ERROR_FIELD", "NO_ANGLE_FIELD", "NORMAL", "ANGLE", "LEFT", "POINT")
     FeatureClassToFeatureClass_conversion("PavementLayers", pub_database, "ev_PavementLayers")
 
+def StateRefpost(target):
+    #add state LRM derivations and add state route ID to reference post 
+    from datetime import datetime
+
+    if target == 'Prod':
+        pub_database = r'C:\Users\planadm\GISDATA\DbConnections\Prod\Geo@KHPub.sde'
+        pubinstance = r"khdbpubprod\khubpub_prod"
+        pub_sdedb = r'C:\Users\planadm\GISDATA\DbConnections\Prod\sde@KHPubProd.sde'
+        tds = r'C:\Users\planadm\GISDATA\DbConnections\Prod\TDSUser@KHProd.sde'
+        RH_Database = tds
+
+    elif target == 'Test':
+        pub_database = r'C:\Users\planadm\GISDATA\DbConnections\KHTest\Geo@KHPubTest.sde'
+        pubinstance = r"khdbpubtest\khubpub_test"
+        pub_sdedb = r'C:\Users\planadm\GISDATA\DbConnections\KHTest\sde@KHPubtest.sde'
+        tds = r'C:\Users\planadm\GISDATA\DbConnections\Prod\TDSUser@KHProd.sde'
+        RH_Database = tds
+
+    else:
+        pub_database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\Geo@KHPubDev.sde'   
+        pubinstance = r"khdbpubdev\khubpub_dev"
+        pub_sdedb = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\sde@KHPubDev.sde'
+        tds = r'C:\Users\planadm\GISDATA\DbConnections\Prod\TDSUser@KHProd.sde'
+        RH_Database = r'C:\Users\planadm\GISDATA\DbConnections\KHDev\RH@Khub.sde'
+        
+    from arcpy import (env, MakeRouteEventLayer_lr, FeatureClassToFeatureClass_conversion, DisconnectUser, Delete_management, Exists,
+    CreateRoutes_lr)
+    env.MResolution = 0.000000018939394
+    env.MTolerance = 0.000000621369949
+    env.overwriteOutput = True
+    #the turnpike should have copied
+    #create the LRS_State LCC layers
+    CreateRoutes_lr(RH_Database+r"/KHUB.RH.ev_StateOnCounty", "StateRouteId", pub_database+r"\\KHubPub.GEO.LRS_State_LCC", "TWO_FIELDS", "FromState", "ToState", "UPPER_LEFT", "1", "0", "IGNORE", "INDEX")
+    StatePrimaryInventory = "(LRSFromDate is null or LRSFromDate<=CURRENT_TIMESTAMP) and (LRSToDate is null or LRSToDate>CURRENT_TIMESTAMP) AND Substring(StateRouteId, 6, 1) = '0' AND (DominantFlag = '1' or DominantFlag is null)"
+    MakeFeatureLayer_management(RH_Database+r"/KHUB.RH.ev_StateOnCounty", "ev_StateOnCounty_prim_inv", StatePrimaryInventory)
+    CreateRoutes_lr("ev_StateOnCounty_prim_inv", "StateRouteId", pub_database+r"\LRS_State_Primary_LCC", "TWO_FIELDS", "FromState", "ToState", "UPPER_LEFT", "1", "0", "IGNORE", "INDEX")
+    #locate the refposts along the state lrm primary inventory route
+    LocateFeaturesAlongRoutes_lr("ev_ReferencePostlyr", "LRS_State_Primary_LCC", "StateRouteId", "50 Feet", "C:/temp/PublishProd20200518.gdb/RefpostState", out_event_properties="StateRouteId POINT State_Meas", route_locations="FIRST", distance_field="DISTANCE", zero_length_events="ZERO", in_fields="FIELDS", m_direction_offsetting="M_DIRECTON")
+    #join the LFAR table and copy to pub with the joined fields
+    #delete some of hte extra joined fields
+    #LFAR refposts to the turnpike
+    #join the LFAR to the state refposts
+    #recalculate the turnpike route refposts measures and routes
+    
+    SelectLayerByAttribute_management(in_layer_or_view="KHubPub.GEO.ev_ReferencePost", selection_type="NEW_SELECTION", where_clause="RefpostKTA.StateRouteId = 'KTA10099900' AND KHubPub.GEO.ev_ReferencePost.ReferencePost < 240")
+
+    
 def maintest():
     #LYRS2Pub('Test')
     Analyze()
@@ -606,17 +679,21 @@ def main():
     #RecreatePubGDB('Prod')
     CreatePrimaryNetwork('Prod')
     PublicateNetworkProd2Target('Prod') ## update prod transactional data to publication in 'dev', 'test', or 'prod'
-    #CreatePrimaryNetwork('Test')
-    #PublicateNetworkProd2Target('Test')  
+    #StateRefpost('Test')
+    CreatePrimaryNetwork('Test')
+    PublicateNetworkProd2Target('Test')  
     #PublicateNetworkProd2Target('Dev') 
     #CreatePrimaryNetwork('Dev')
     #LYRS2Pub('Prod')
+    CleanupProc()
     
     print("run completed" )
 def main2():
-    PublicateNetworkProd2Target('Test')  
-    CreatePrimaryNetwork('Test')
-    PublicateNetworkProd2Target('Dev') 
-    CreatePrimaryNetwork('Dev')
+    #PublicateNetworkProd2Target('Prod')  
+    #CreatePrimaryNetwork('Test')
+    #PublicateNetworkProd2Target('Dev') 
+    #CreatePrimaryNetwork('Dev')
+	LYRS2Pub('Prod')
+    #CleanupProc()
 
 main()
